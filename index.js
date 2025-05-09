@@ -26,15 +26,13 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`🔌 New client connected: ${socket.id}`);
 
-  socket.on('create-room', (roomId) => {
-    if (!roomId || typeof roomId !== 'string') {
-      console.log('Invalid room ID');
+  socket.on('create-room', ({ roomId, userName }) => {
+    if (!roomId || !userName || typeof roomId !== 'string' || typeof userName !== 'string') {
       socket.emit('invalid-room');
       return;
     }
 
     if (rooms[roomId]) {
-      console.log(`❌ Room ${roomId} already exists`);
       socket.emit('room-exists');
       return;
     }
@@ -45,18 +43,18 @@ io.on('connection', (socket) => {
       isStreaming: false,
       isHostReady: false,
       messages: [],
+      users: { [socket.id]: userName },
     };
 
     socketToRoom[socket.id] = roomId;
     socket.join(roomId);
 
-    console.log(`🛠 Room created: ${roomId} by ${socket.id}`);
     socket.emit('room-created', { roomId });
     emitRoomInfo(roomId);
   });
 
-  socket.on('join-room', (roomId) => {
-    if (!roomId || typeof roomId !== 'string') {
+  socket.on('join-room', ({ roomId, userName }) => {
+    if (!roomId || !userName || typeof roomId !== 'string' || typeof userName !== 'string') {
       socket.emit('invalid-room');
       return;
     }
@@ -72,6 +70,7 @@ io.on('connection', (socket) => {
     }
 
     rooms[roomId].viewers.add(socket.id);
+    rooms[roomId].users[socket.id] = userName;
     socketToRoom[socket.id] = roomId;
     socket.join(roomId);
 
@@ -80,16 +79,15 @@ io.on('connection', (socket) => {
       hostId: rooms[roomId].hostId,
       isHostStreaming: rooms[roomId].isStreaming,
       viewerCount: rooms[roomId].viewers.size,
-      messages: rooms[roomId].messages,
+      users: rooms[roomId].users,
     });
 
     if (rooms[roomId].isHostReady) {
-      io.to(rooms[roomId].hostId).emit('user-joined', socket.id);
+      io.to(roomId).emit('user-joined', { userId: socket.id, userName });
     }
 
     if (rooms[roomId].isStreaming) {
       socket.emit('host-started-streaming');
-      socket.emit('viewer-joined', rooms[roomId].hostId);
     }
 
     emitRoomInfo(roomId);
@@ -103,11 +101,20 @@ io.on('connection', (socket) => {
     rooms[roomId].isStreaming = true;
     rooms[roomId].isHostReady = true;
     rooms[roomId].viewers.forEach((viewerId) => {
-      console.log(`📢 Notifying viewer ${viewerId} that host is streaming`);
       io.to(viewerId).emit('host-started-streaming');
-      io.to(viewerId).emit('viewer-joined', socket.id);
     });
-    console.log(`🎥 Host ${socket.id} started streaming in room ${roomId}`);
+    emitRoomInfo(roomId);
+  });
+
+  socket.on('stop-streaming', (roomId) => {
+    if (!rooms[roomId] || rooms[roomId].hostId !== socket.id) {
+      return;
+    }
+
+    rooms[roomId].isStreaming = false;
+    rooms[roomId].viewers.forEach((viewerId) => {
+      io.to(viewerId).emit('host-stopped-streaming');
+    });
     emitRoomInfo(roomId);
   });
 
@@ -116,7 +123,6 @@ io.on('connection', (socket) => {
       console.error('Invalid offer data');
       return;
     }
-    console.log(`📡 Sending offer from ${socket.id} to ${target}`);
     io.to(target).emit('offer', { sdp, sender: socket.id });
   });
 
@@ -125,7 +131,6 @@ io.on('connection', (socket) => {
       console.error('Invalid answer data');
       return;
     }
-    console.log(`📡 Sending answer from ${socket.id} to ${target}`);
     io.to(target).emit('answer', { sdp, sender: socket.id });
   });
 
@@ -134,7 +139,6 @@ io.on('connection', (socket) => {
       console.error('Invalid ICE candidate data');
       return;
     }
-    console.log(`📡 Sending ICE candidate from ${socket.id} to ${target}`);
     io.to(target).emit('ice-candidate', { candidate, sender: socket.id });
   });
 
@@ -142,7 +146,6 @@ io.on('connection', (socket) => {
     if (!message || typeof message !== 'string') {
       return;
     }
-    console.log(`💬 Message from ${socket.id}: ${message}`);
     const roomId = socketToRoom[socket.id];
     if (roomId && rooms[roomId]) {
       const newMessage = { sender: socket.id, message };
@@ -152,7 +155,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leave-room', () => {
-    console.log(`🚪 ${socket.id} is leaving the room`);
     const roomId = socketToRoom[socket.id];
     if (roomId) {
       leaveRoom(socket, roomId);
@@ -160,7 +162,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`❌ Client disconnected: ${socket.id}`);
     const roomId = socketToRoom[socket.id];
     if (roomId) {
       leaveRoom(socket, roomId);
@@ -173,7 +174,6 @@ io.on('connection', (socket) => {
     const isHost = rooms[roomId].hostId === socket.id;
 
     if (isHost) {
-      console.log(`🛑 Host ${socket.id} left, closing room ${roomId}`);
       io.to(roomId).emit('host-left');
       rooms[roomId].viewers.forEach((viewerId) => {
         io.to(viewerId).emit('room-closed');
@@ -183,8 +183,8 @@ io.on('connection', (socket) => {
       delete rooms[roomId];
     } else {
       rooms[roomId].viewers.delete(socket.id);
-      console.log(`🚪 Viewer ${socket.id} left room ${roomId}`);
-      io.to(rooms[roomId].hostId).emit('user-left', socket.id);
+      delete rooms[roomId].users[socket.id];
+      io.to(roomId).emit('user-left', socket.id);
     }
 
     delete socketToRoom[socket.id];
@@ -200,9 +200,9 @@ io.on('connection', (socket) => {
       viewerCount: rooms[roomId].viewers.size,
       isHostActive: io.sockets.sockets.has(rooms[roomId].hostId),
       isHostStreaming: rooms[roomId].isStreaming,
+      users: rooms[roomId].users,
     };
 
-    console.log(`📊 Emitting room info for ${roomId}:`, info);
     io.to(roomId).emit('room-info', info);
   }
 });
@@ -220,6 +220,7 @@ app.get('/rooms', (req, res) => {
     viewerCount: rooms[roomId].viewers.size,
     isStreaming: rooms[roomId].isStreaming,
     hostId: rooms[roomId].hostId,
+    users: rooms[roomId].users,
   }));
 
   res.status(200).json({
