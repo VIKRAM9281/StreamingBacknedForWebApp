@@ -103,10 +103,8 @@ io.on('connection', (socket) => {
       if (rooms[room]?.hostId === socket.id) {
         rooms[room].hostId = null;
       }
-      console.log(rooms[room]);
-      const leftstreamer=rooms[room]?.streamers
-      if(leftstreamer){
-        leftstreamer = rooms[room]?.streamers?.filter(id => id !== socket.id) || [];
+      if(rooms[room]){
+        rooms[room].streamers = rooms[room]?.streamers?.filter(id => id !== socket.id) || [];
       }
 
       socket.to(room).emit('userLeft', socket.id);
