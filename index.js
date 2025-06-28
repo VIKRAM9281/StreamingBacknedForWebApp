@@ -19,9 +19,6 @@ const MAX_USERS = 4;
 const STATIC_ROOMS = ['room1', 'room2', 'room3', 'room4'];
 let roomUsers = {}; // e.g., { room1: [socketId1, socketId2] }
 
-app.use(cors());
-app.use(express.json());
-
 app.get('/', (req, res) => {
   res.send('🔗 WebRTC Signaling Server is live!');
 });
