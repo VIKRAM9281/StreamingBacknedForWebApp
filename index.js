@@ -97,6 +97,6 @@ io.on('connection', (socket) => {
   });
 });
 
-http.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`🚀 Signaling server running on port ${PORT}`);
 });
