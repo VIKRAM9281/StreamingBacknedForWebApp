@@ -1,72 +1,64 @@
 const express = require('express');
 const http = require('http');
-const cors = require('cors');
 const { Server } = require('socket.io');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-
 const io = new Server(server, {
   cors: {
-    origin: '*', // Change this to your frontend domain in production
+    origin: '*',
     methods: ['GET', 'POST'],
   },
 });
 
-const PORT = process.env.PORT || 6000;
-
-const MAX_USERS = 4;
-const STATIC_ROOMS = ['room1', 'room2', 'room3', 'room4'];
-let roomUsers = {}; // e.g., { room1: [socketId1, socketId2] }
-
-app.get('/', (req, res) => {
-  res.send('🔗 WebRTC Signaling Server is live!');
-});
-
+const rooms = {}; // { roomId: { host: socketId, viewers: [], streamers: [] } }
+app.get((req,res)=>{
+  res.send("Hello")
+})
 io.on('connection', (socket) => {
-  console.log(`🔌 New user connected: ${socket.id}`);
+  console.log('User connected:', socket.id);
 
-  socket.on('getRooms', () => {
-    const roomsStatus = STATIC_ROOMS.map((room) => ({
-      name: room,
-      count: roomUsers[room]?.length || 0,
-      full: (roomUsers[room]?.length || 0) >= MAX_USERS,
-    }));
-    socket.emit('roomsList', roomsStatus);
-  });
-
-  socket.on('joinRoom', (roomName) => {
-    if (!STATIC_ROOMS.includes(roomName)) return;
-
-    roomUsers[roomName] = roomUsers[roomName] || [];
-
-    if (roomUsers[roomName].length >= MAX_USERS) {
-      socket.emit('roomFull');
-      return;
+  socket.on('join-room', ({ roomId, role }) => {
+    socket.join(roomId);
+    console.log(roomId);
+    if (!rooms[roomId]) {
+      rooms[roomId] = { host: null, viewers: [], streamers: [] };
     }
 
-    socket.join(roomName);
-    roomUsers[roomName].push(socket.id);
+    if (role === 'host') rooms[roomId].host = socket.id;
+    else rooms[roomId].viewers.push(socket.id);
 
-    const otherUsers = roomUsers[roomName].filter((id) => id !== socket.id);
-    socket.emit('joined', { room: roomName, users: otherUsers });
+    io.to(roomId).emit('user-joined', { id: socket.id, role });
+  });
 
-    otherUsers.forEach((userId) => {
-      io.to(userId).emit('newUser', socket.id);
-    });
+  socket.on('request-stream', ({ roomId }) => {
+    console.log('requested ',socket.id);
+    const hostId = rooms[roomId]?.host;
+    if (hostId) io.to(hostId).emit('stream-request', { id: socket.id });
+  });
 
-    socket.on('signal', ({ to, data }) => {
-      io.to(to).emit('signal', { from: socket.id, data });
-    });
+  socket.on('approve-stream', ({ roomId, toUserId }) => {
+    if (rooms[roomId]) rooms[roomId].streamers.push(toUserId);
+    io.to(toUserId).emit('stream-approved');
+  });
 
-    socket.on('disconnect', () => {
-      console.log(`❌ User disconnected: ${socket.id}`);
-      roomUsers[roomName] = (roomUsers[roomName] || []).filter((id) => id !== socket.id);
-      socket.to(roomName).emit('userLeft', socket.id);
-    });
+  socket.on('signal', ({ roomId, to, from, data }) => {
+    console.log(data);
+    io.to(to).emit('signal', { from, data });
+  });
+
+  socket.on('disconnecting', () => {
+    console.log('disconnected');
+    for (const roomId of socket.rooms) {
+      const room = rooms[roomId];
+      if (!room) continue;
+      room.viewers = room.viewers.filter((id) => id !== socket.id);
+      room.streamers = room.streamers.filter((id) => id !== socket.id);
+      if (room.host === socket.id) room.host = null;
+      io.to(roomId).emit('user-left', { id: socket.id });
+    }
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`✅ Signaling server running on port ${PORT}`);
-});
+server.listen(5000, () => console.log('Server running on port http://192.168.63.113:5000'));
