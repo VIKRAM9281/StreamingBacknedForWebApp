@@ -20,7 +20,8 @@ app.use(cors({
 
 
 const PORT = process.env.PORT || 3001;
-
+// Add to your room structure
+const rooms = {}; // { roomName: { hostId: null, users: [] } }
 const MAX_USERS = 4;
 const STATIC_ROOMS = ['room1', 'room2', 'room3', 'room4'];
 let roomUsers = {}; // e.g., { room1: [socketId1, socketId2] }
@@ -47,7 +48,14 @@ io.on('connection', (socket) => {
     }));
     socket.emit('roomsList', roomsStatus);
   });
-
+  
+  if (!rooms[roomName].hostId) {
+    rooms[roomName].hostId = socket.id;
+    io.to(socket.id).emit('role', 'host');
+  } else {
+    io.to(socket.id).emit('role', 'viewer');
+  }
+  
   socket.on('joinRoom', (roomName) => {
     if (!STATIC_ROOMS.includes(roomName)) return;
 
@@ -78,6 +86,13 @@ io.on('connection', (socket) => {
       socket.to(roomName).emit('userLeft', socket.id);
     });
   });
+  socket.on('streamRequest', () => {
+    const room = findUserRoom(socket.id);
+    if (room && rooms[room].hostId) {
+      io.to(rooms[room].hostId).emit('streamRequest', socket.id);
+    }
+  });
+  
 });
 
 server.listen(PORT, () => {
